@@ -1,0 +1,62 @@
+{
+	"name": "sigv4fetch",
+	"version": "0.1.0",
+	"description": "AWS Signature Version 4 signing for fetch — zero dependencies, Node.js 22+.",
+	"type": "module",
+	"license": "MIT",
+	"author": "nunesunil",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nunesunil/sigv4fetch.git"
+	},
+	"homepage": "https://github.com/nunesunil/sigv4fetch#readme",
+	"bugs": {
+		"url": "https://github.com/nunesunil/sigv4fetch/issues"
+	},
+	"keywords": [
+		"aws",
+		"sigv4",
+		"signature-v4",
+		"fetch",
+		"aws4",
+		"s3",
+		"signing",
+		"aws4fetch",
+		"authentication",
+		"rest"
+	],
+	"sideEffects": false,
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"publishConfig": {
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"dev": "tsdown --watch",
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "pnpm run typecheck && pnpm run build"
+	},
+	"devDependencies": {
+		"@types/node": "^25",
+		"tsdown": "^0",
+		"typescript": "^6"
+	}
+}
