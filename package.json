@@ -1,7 +1,7 @@
 {
 	"name": "sigv4fetch",
-	"version": "0.1.0",
-	"description": "AWS Signature Version 4 signing for fetch — zero dependencies, Node.js 22+.",
+	"version": "1.0.0",
+	"description": "AWS Signature Version 4 signing for fetch, with S3-compatible helpers for Node.js 22+.",
 	"type": "module",
 	"license": "MIT",
 	"author": "nunesunil",
@@ -58,5 +58,8 @@
 		"@types/node": "^25",
 		"tsdown": "^0",
 		"typescript": "^6"
+	},
+	"dependencies": {
+		"fast-xml-parser": "^5"
 	}
 }

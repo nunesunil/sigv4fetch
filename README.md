@@ -10,7 +10,7 @@ Inspired by [aws4fetch](https://github.com/mhart/aws4fetch), with TypeScript typ
 ## Requirements
 
 - **Node.js 22+** — native `fetch`, `Request`, `Headers`, `TextEncoder`, and Web Crypto (`crypto.subtle`) are used directly
-- **Zero runtime dependencies**
+- A small XML parser dependency is used for S3-compatible listing helpers
 
 ## Install
 
@@ -160,6 +160,106 @@ console.log(url.toString()) // shareable presigned URL
 ```
 
 S3 presigned URLs default to `X-Amz-Expires=86400` (24 hours) when not set.
+
+## S3-Compatible Providers
+
+Use `customS3Client` for AWS S3 and most S3-compatible storage providers, including Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Linode Object Storage, MinIO, Wasabi, Tigris, and other custom endpoints.
+
+For virtual-host style endpoints:
+
+```typescript
+import { customS3Client, listObjectsV2 } from 'sigv4fetch'
+
+const s3 = customS3Client({
+  host: 's3.us-east-1.amazonaws.com',
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  region: 'us-east-1',
+})
+
+const objects = await listObjectsV2(s3, {
+  bucket: 'my-bucket',
+  sortBy: 'key',
+})
+```
+
+For path-style endpoints, such as many MinIO deployments:
+
+```typescript
+const minio = customS3Client({
+  host: 'localhost:9000',
+  accessKeyId: 'minioadmin',
+  secretAccessKey: 'minioadmin',
+  region: 'us-east-1',
+  secure: false,
+  forcePathStyle: true,
+})
+```
+
+Cloudflare R2 also has a convenience helper:
+
+```typescript
+import { cloudflareR2Client, listObjectsV2 } from 'sigv4fetch'
+
+const r2 = cloudflareR2Client({
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,
+  accessKeyId: process.env.CLOUDFLARE_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.CLOUDFLARE_SECRET_ACCESS_KEY!,
+})
+
+const objects = await listObjectsV2(r2, {
+  bucket: 'my-bucket',
+  prefix: 'uploads/',
+  sortBy: 'lastModified',
+  sortDirection: 'desc',
+})
+
+console.log(objects.contents)
+```
+
+`listObjectsV2` parses the XML returned by S3-compatible providers and can sort the returned `contents` array client-side. `sortBy` supports `key`, `lastModified`, `size`, `eTag`, and `storageClass`.
+
+Common object helpers are included:
+
+```typescript
+import {
+  deleteObject,
+  deleteObjects,
+  getObjectBlob,
+  headObject,
+  putObject,
+} from 'sigv4fetch'
+
+await putObject(s3, {
+  bucket: 'my-bucket',
+  key: 'uploads/hello.txt',
+  body: 'hello',
+  contentType: 'text/plain',
+  metadata: { source: 'example' },
+})
+
+const head = await headObject(s3, {
+  bucket: 'my-bucket',
+  key: 'uploads/hello.txt',
+})
+
+const object = await getObjectBlob(s3, {
+  bucket: 'my-bucket',
+  key: 'uploads/hello.txt',
+})
+
+await deleteObject(s3, {
+  bucket: 'my-bucket',
+  key: 'uploads/hello.txt',
+})
+
+await deleteObjects(s3, {
+  bucket: 'my-bucket',
+  objects: [{ key: 'uploads/a.txt' }, { key: 'uploads/b.txt' }],
+})
+```
+
+Provider compatibility depends on how closely the service implements the S3 API. Some providers require path-style URLs, a specific region value, or slightly different endpoint hosts.
 
 ## Injectable Web APIs
 
