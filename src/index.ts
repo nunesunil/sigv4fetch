@@ -53,31 +53,6 @@ function resolveApi(api?: AwsApiInput): AwsApi {
 
 export { getDefaultApi };
 
-const HOST_SERVICES = {
-	appstream2: "appstream",
-	cloudhsmv2: "cloudhsm",
-	email: "ses",
-	marketplace: "aws-marketplace",
-	mobile: "AWSMobileHubService",
-	pinpoint: "mobiletargeting",
-	queue: "sqs",
-	"git-codecommit": "codecommit",
-	"mturk-requester-sandbox": "mturk-requester",
-	"personalize-runtime": "personalize",
-} as const satisfies Record<string, string>;
-
-const UNSIGNABLE_HEADERS = new Set([
-	"authorization",
-	"content-type",
-	"content-length",
-	"user-agent",
-	"presigned-expires",
-	"expect",
-	"x-amzn-trace-id",
-	"range",
-	"connection",
-]);
-
 export interface AwsSigningOptions {
 	accessKeyId?: string;
 	secretAccessKey?: string;
@@ -91,6 +66,8 @@ export interface AwsSigningOptions {
 	allHeaders?: boolean;
 	singleEncode?: boolean;
 }
+
+export type AwsRequestOptions = AwsSigningOptions;
 
 export interface AwsClientOptions extends AwsSigningOptions {
 	accessKeyId: string;
@@ -122,7 +99,35 @@ export interface SignedRequest {
 	body?: BodyInit | null;
 }
 
+export type SignedAwsRequest = SignedRequest;
+
 type SignInput = Request | { toString(): string };
+
+const HOST_SERVICES: Record<string, string> = {
+	appstream2: "appstream",
+	cloudhsmv2: "cloudhsm",
+	email: "ses",
+	marketplace: "aws-marketplace",
+	mobile: "AWSMobileHubService",
+	pinpoint: "mobiletargeting",
+	queue: "sqs",
+	"git-codecommit": "codecommit",
+	"mturk-requester-sandbox": "mturk-requester",
+	"personalize-runtime": "personalize",
+};
+
+// https://github.com/aws/aws-sdk-js/blob/cc29728c1c4178969ebabe3bbe6b6f3159436394/lib/signers/v4.js#L190-L198
+const UNSIGNABLE_HEADERS = new Set([
+	"authorization",
+	"content-type",
+	"content-length",
+	"user-agent",
+	"presigned-expires",
+	"expect",
+	"x-amzn-trace-id",
+	"range",
+	"connection",
+]);
 
 function mergeSigningOptions(
 	client: AwsClient,
@@ -180,9 +185,9 @@ function toRequestInit(
 export class AwsClient {
 	accessKeyId: string;
 	secretAccessKey: string;
-	sessionToken: string | undefined;
-	service: string | undefined;
-	region: string | undefined;
+	sessionToken?: string;
+	service?: string;
+	region?: string;
 	cache: Map<string, ArrayBuffer>;
 	retries: number;
 	initRetryMs: number;
@@ -268,16 +273,16 @@ export class AwsV4Signer {
 	method: string;
 	url: URL;
 	headers: Headers;
-	body: BodyInit | null | undefined;
+	body?: BodyInit | null;
 	accessKeyId: string;
 	secretAccessKey: string;
-	sessionToken: string | undefined;
+	sessionToken?: string;
 	service: string;
 	region: string;
 	cache: Map<string, ArrayBuffer>;
 	datetime: string;
-	signQuery: boolean | undefined;
-	appendSessionToken: boolean;
+	signQuery?: boolean;
+	appendSessionToken?: boolean;
 	signableHeaders: string[];
 	signedHeaders: string;
 	canonicalHeaders: string;
@@ -359,7 +364,7 @@ export class AwsV4Signer {
 			params.set("X-Amz-Security-Token", this.sessionToken);
 		}
 
-		// header names from forEach are always lowercase
+		// headers are always lowercase after normalization
 		this.signableHeaders = ["host", ...getHeaderNames(this.headers)]
 			.filter((header) => allHeaders || !UNSIGNABLE_HEADERS.has(header))
 			.sort();
@@ -371,7 +376,11 @@ export class AwsV4Signer {
 		this.canonicalHeaders = this.signableHeaders
 			.map(
 				(header) =>
-					`${header}:${header === "host" ? this.url.host : (this.headers.get(header) ?? "").replace(/\s+/g, " ")}`,
+					header +
+					":" +
+					(header === "host"
+						? this.url.host
+						: (this.headers.get(header) || "").replace(/\s+/g, " ")),
 			)
 			.join("\n");
 
@@ -423,17 +432,14 @@ export class AwsV4Signer {
 				}
 				return true;
 			})
-			.map(
-				([k, v]) =>
-					[
-						encodeRfc3986(encodeURIComponent(k)),
-						encodeRfc3986(encodeURIComponent(v)),
-					] as [string, string],
-			)
+			.map(([key, value]): [string, string] => [
+				encodeRfc3986(encodeURIComponent(key)),
+				encodeRfc3986(encodeURIComponent(value)),
+			])
 			.sort(([k1, v1], [k2, v2]) =>
 				k1 < k2 ? -1 : k1 > k2 ? 1 : v1 < v2 ? -1 : v1 > v2 ? 1 : 0,
 			)
-			.map(([k, v]) => `${k}=${v}`)
+			.map((pair) => pair.join("="))
 			.join("&");
 	}
 
@@ -457,7 +463,10 @@ export class AwsV4Signer {
 
 	async authHeader(): Promise<string> {
 		return [
-			`AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${this.credentialString}`,
+			"AWS4-HMAC-SHA256 Credential=" +
+				this.accessKeyId +
+				"/" +
+				this.credentialString,
 			`SignedHeaders=${this.signedHeaders}`,
 			`Signature=${await this.signature()}`,
 		].join(", ");
@@ -537,14 +546,10 @@ export class AwsV4Signer {
 
 	async hexBodyHash(): Promise<string> {
 		let hashHeader =
-			this.headers.get("X-Amz-Content-Sha256") ??
+			this.headers.get("X-Amz-Content-Sha256") ||
 			(this.service === "s3" && this.signQuery ? "UNSIGNED-PAYLOAD" : null);
 		if (hashHeader == null) {
-			if (
-				this.body &&
-				typeof this.body !== "string" &&
-				!("byteLength" in this.body)
-			) {
+			if (this.body && !isHashableBody(this.body)) {
 				throw new Error(
 					"body must be a string, ArrayBuffer or ArrayBufferView, unless you include the X-Amz-Content-Sha256 header",
 				);
@@ -555,6 +560,14 @@ export class AwsV4Signer {
 		}
 		return hashHeader;
 	}
+}
+
+function isHashableBody(body: BodyInit): body is string | BufferSource {
+	return (
+		typeof body === "string" ||
+		ArrayBuffer.isView(body) ||
+		body instanceof ArrayBuffer
+	);
 }
 
 function getHeaderNames(headers: Headers): string[] {
@@ -604,12 +617,13 @@ const HEX_CHARS = "0123456789abcdef";
 
 function buf2hex(arrayBuffer: ArrayBufferLike): string {
 	const buffer = new Uint8Array(arrayBuffer);
-	let out = "";
-	for (const n of buffer) {
-		out += HEX_CHARS[(n >>> 4) & 0xf];
-		out += HEX_CHARS[n & 0xf];
+	const out = new Array<string>(buffer.length * 2);
+	for (let idx = 0; idx < buffer.length; idx++) {
+		const n = buffer[idx] ?? 0;
+		out[idx * 2] = HEX_CHARS.charAt((n >>> 4) & 0xf);
+		out[idx * 2 + 1] = HEX_CHARS.charAt(n & 0xf);
 	}
-	return out;
+	return out.join("");
 }
 
 function encodeRfc3986(urlEncodedStr: string): string {
@@ -619,14 +633,17 @@ function encodeRfc3986(urlEncodedStr: string): string {
 	);
 }
 
-function guessServiceRegion(url: URL, headers: Headers): [string, string] {
+function guessServiceRegion(
+	url: URL,
+	headers: Headers,
+): [service: string, region: string] {
 	const { hostname, pathname } = url;
 
 	if (hostname.endsWith(".on.aws")) {
 		const match = hostname.match(
 			/^[^.]{1,63}\.lambda-url\.([^.]{1,63})\.on\.aws$/,
 		);
-		return match != null ? ["lambda", match[1] ?? ""] : ["", ""];
+		return match != null ? ["lambda", match[1] || ""] : ["", ""];
 	}
 	if (hostname.endsWith(".r2.cloudflarestorage.com")) {
 		return ["s3", "auto"];
@@ -635,7 +652,7 @@ function guessServiceRegion(url: URL, headers: Headers): [string, string] {
 		const match = hostname.match(
 			/^(?:[^.]{1,63}\.)?s3\.([^.]{1,63})\.backblazeb2\.com$/,
 		);
-		return match != null ? ["s3", match[1] ?? ""] : ["", ""];
+		return match != null ? ["s3", match[1] || ""] : ["", ""];
 	}
 	if (hostname.endsWith(".linodeobjects.com")) {
 		const match = hostname.match(
@@ -652,8 +669,8 @@ function guessServiceRegion(url: URL, headers: Headers): [string, string] {
 	const match = hostname
 		.replace("dualstack.", "")
 		.match(/([^.]{1,63})\.(?:([^.]{0,63})\.)?amazonaws\.com(?:\.cn)?$/);
-	let service = match?.[1] ?? "";
-	let region = match?.[2];
+	let service = (match && match[1]) || "";
+	let region = match && match[2];
 
 	if (region === "us-gov") {
 		region = "us-gov-west-1";
@@ -669,7 +686,7 @@ function guessServiceRegion(url: URL, headers: Headers): [string, string] {
 			service = pathname === "/mqtt" ? "iotdevicegateway" : "iotdata";
 		}
 	} else if (service === "autoscaling") {
-		const targetPrefix = (headers.get("X-Amz-Target") ?? "").split(".")[0];
+		const targetPrefix = (headers.get("X-Amz-Target") || "").split(".")[0];
 		if (targetPrefix === "AnyScaleFrontendService") {
 			service = "application-autoscaling";
 		} else if (targetPrefix === "AnyScaleScalingPlannerFrontendService") {
@@ -684,8 +701,5 @@ function guessServiceRegion(url: URL, headers: Headers): [string, string] {
 		[service, region] = [region, service];
 	}
 
-	return [
-		HOST_SERVICES[service as keyof typeof HOST_SERVICES] ?? service,
-		region ?? "",
-	];
+	return [HOST_SERVICES[service] || service, region || ""];
 }
