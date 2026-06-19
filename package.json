@@ -52,10 +52,11 @@
 		"build": "tsdown",
 		"dev": "tsdown --watch",
 		"typecheck": "tsc --noEmit",
-		"prepublishOnly": "pnpm run typecheck && pnpm run build"
+		"test": "pnpm run build && node --experimental-strip-types --test test/**/*.test.ts",
+		"prepublishOnly": "pnpm run typecheck && pnpm run build && pnpm run test"
 	},
 	"devDependencies": {
-		"@types/node": "^25",
+		"@types/node": "^26",
 		"tsdown": "^0",
 		"typescript": "^6"
 	},

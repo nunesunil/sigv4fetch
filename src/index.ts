@@ -262,6 +262,19 @@ export interface DeleteObjectsResult {
 	}>;
 }
 
+/** Error thrown when an S3-compatible API returns a non-2xx response. */
+export class S3Error extends Error {
+	readonly code: string;
+	readonly status: number;
+
+	constructor(code: string, message: string, status: number) {
+		super(`${code} - ${message}`);
+		this.name = "S3Error";
+		this.code = code;
+		this.status = status;
+	}
+}
+
 const HOST_SERVICES: Record<string, string> = {
 	appstream2: "appstream",
 	cloudhsmv2: "cloudhsm",
@@ -439,7 +452,8 @@ export async function putObject(
 	assertObjectKey(options.key);
 
 	const contentLength =
-		options.contentLength ?? getBodyContentLength(options.body);
+		options.contentLength ??
+		getBodyContentLength(options.body, client.s3.textEncoder);
 	const headers: Record<string, string> = {
 		"content-type": options.contentType,
 		...(contentLength == null
@@ -545,7 +559,8 @@ export async function deleteObjects(
 			method: "POST",
 			headers: {
 				"content-type": "application/xml",
-				"content-length": getBodyContentLength(body)?.toString() ?? "0",
+				"content-length":
+					getBodyContentLength(body, client.s3.textEncoder)?.toString() ?? "0",
 				"content-md5": md5Base64(client.s3.textEncoder, body),
 				"x-amz-checksum-sha256": await sha256Base64(
 					client.s3.api.crypto,
@@ -641,8 +656,13 @@ export class AwsClient {
 			if (res.status < 500 && res.status !== 429) {
 				return res;
 			}
+			const retryAfterMs = parseRetryAfterMs(res);
+			await drainResponseBody(res);
 			await new Promise((resolve) =>
-				setTimeout(resolve, Math.random() * this.initRetryMs * 2 ** i),
+				setTimeout(
+					resolve,
+					retryAfterMs ?? Math.random() * this.initRetryMs * 2 ** i,
+				),
 			);
 		}
 		throw new Error(
@@ -1001,19 +1021,30 @@ type DeleteObjectsXml = {
 	};
 };
 
+const xmlParserCache = new Map<string, XMLParser>();
+
+function getXmlParser(arrayPath: string[] = []): XMLParser {
+	const key = arrayPath.join("\0");
+	let parser = xmlParserCache.get(key);
+	if (!parser) {
+		parser = new XMLParser({
+			ignoreAttributes: true,
+			parseTagValue: false,
+			isArray: (_name, path) =>
+				typeof path === "string" && arrayPath.includes(path),
+		});
+		xmlParserCache.set(key, parser);
+	}
+	return parser;
+}
+
 function parseS3Xml<T>(
 	xml: string,
 	options?: {
 		arrayPath?: string[];
 	},
 ): T {
-	const parser = new XMLParser({
-		ignoreAttributes: true,
-		parseTagValue: false,
-		isArray: (_name, path) =>
-			typeof path === "string" && (options?.arrayPath?.includes(path) ?? false),
-	});
-	return parser.parse(xml) as T;
+	return getXmlParser(options?.arrayPath).parse(xml) as T;
 }
 
 async function throwS3Error(res: Response): Promise<Response> {
@@ -1024,12 +1055,12 @@ async function throwS3Error(res: Response): Promise<Response> {
 		const parsed = parseS3Xml<S3ErrorXml>(text);
 		const code = toOptionalString(parsed.Error?.Code) ?? res.status.toString();
 		const message = toOptionalString(parsed.Error?.Message) ?? res.statusText;
-		throw new Error(`${code} - ${message}`);
+		throw new S3Error(code, message, res.status);
 	} catch (error) {
-		if (error instanceof Error && error.message.includes(" - ")) {
+		if (error instanceof S3Error) {
 			throw error;
 		}
-		throw new Error(`${res.status} - ${res.statusText}`);
+		throw new S3Error(res.status.toString(), res.statusText, res.status);
 	}
 }
 
@@ -1186,14 +1217,17 @@ function parseHeadObjectHeaders(headers: Headers): HeadObjectResult {
 	};
 }
 
-function getBodyContentLength(body: BodyInit | null): number | null {
+function getBodyContentLength(
+	body: BodyInit | null,
+	encoder: TextEncoder,
+): number | null {
 	if (body == null) return 0;
-	if (typeof body === "string") return new TextEncoder().encode(body).length;
+	if (typeof body === "string") return encoder.encode(body).length;
 	if (body instanceof Blob) return body.size;
 	if (body instanceof ArrayBuffer) return body.byteLength;
 	if (ArrayBuffer.isView(body)) return body.byteLength;
 	if (body instanceof URLSearchParams) {
-		return new TextEncoder().encode(body.toString()).length;
+		return encoder.encode(body.toString()).length;
 	}
 	if (body instanceof FormData) return null;
 	if (body instanceof ReadableStream) return null;
@@ -1378,6 +1412,28 @@ function getSearchParamPairs(params: URLSearchParams): [string, string][] {
 		pairs.push([key, value]);
 	});
 	return pairs;
+}
+
+async function drainResponseBody(res: Response): Promise<void> {
+	try {
+		await res.body?.cancel?.();
+	} catch {
+		await res.arrayBuffer().catch(() => {});
+	}
+}
+
+function parseRetryAfterMs(res: Response): number | undefined {
+	const header = res.headers.get("retry-after");
+	if (!header) return undefined;
+	const seconds = Number(header);
+	if (!Number.isNaN(seconds)) {
+		return seconds * 1000;
+	}
+	const date = Date.parse(header);
+	if (!Number.isNaN(date)) {
+		return Math.max(0, date - Date.now());
+	}
+	return undefined;
 }
 
 async function hmac(
