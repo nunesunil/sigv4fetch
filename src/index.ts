@@ -429,14 +429,14 @@ export async function listObjectsV2(
 
 	const res = await client.s3.fetch(url.toString(), {
 		method: "GET",
-		aws: { signQuery: true, allHeaders: true },
+		aws: { allHeaders: true },
 	});
 	await throwS3Error(res);
 
 	const parsed = parseS3Xml<ListObjectsV2Xml>(await res.text(), {
 		arrayPath: ["ListBucketResult.CommonPrefixes", "ListBucketResult.Contents"],
 	});
-	const result = mapListObjectsV2Result(parsed);
+	const result = mapListObjectsV2Result(parsed, res.status);
 
 	if (options.sortBy) {
 		sortS3Objects(result.contents, options.sortBy, options.sortDirection ?? "asc");
@@ -473,7 +473,7 @@ export async function putObject(
 			method: "PUT",
 			headers,
 			body: options.body,
-			aws: { signQuery: true, allHeaders: true },
+			aws: { allHeaders: true },
 		}),
 	);
 
@@ -494,7 +494,7 @@ export async function headObject(
 			versionId: options.versionId,
 		}), {
 			method: "HEAD",
-			aws: { signQuery: true, allHeaders: true },
+			aws: { allHeaders: true },
 		}),
 	);
 
@@ -513,7 +513,7 @@ export async function getObjectBlob(
 		}), {
 			method: "GET",
 			headers: options.range ? { range: options.range } : undefined,
-			aws: { signQuery: true, allHeaders: true },
+			aws: { allHeaders: true },
 		}),
 	);
 
@@ -534,7 +534,7 @@ export async function deleteObject(
 			versionId: options.versionId,
 		}), {
 			method: "DELETE",
-			aws: { signQuery: true, allHeaders: true },
+			aws: { allHeaders: true },
 		}),
 	);
 }
@@ -569,7 +569,7 @@ export async function deleteObjects(
 				),
 			},
 			body,
-			aws: { signQuery: true, allHeaders: true },
+			aws: { allHeaders: true },
 		}),
 	);
 	const parsed = parseS3Xml<DeleteObjectsXml>(await res.text(), {
@@ -965,7 +965,7 @@ export class AwsV4Signer {
 }
 
 type ListObjectsV2Xml = {
-	ListBucketResult: {
+	ListBucketResult?: {
 		CommonPrefixes?: Array<{ Prefix?: unknown }>;
 		Contents?: Array<{
 			ChecksumAlgorithm?: unknown;
@@ -1064,8 +1064,18 @@ async function throwS3Error(res: Response): Promise<Response> {
 	}
 }
 
-function mapListObjectsV2Result(parsed: ListObjectsV2Xml): ListObjectsV2Result {
+function mapListObjectsV2Result(
+	parsed: ListObjectsV2Xml,
+	status: number,
+): ListObjectsV2Result {
 	const result = parsed.ListBucketResult;
+	if (result == null) {
+		throw new S3Error(
+			"UnexpectedResponse",
+			"Missing ListBucketResult in response.",
+			status,
+		);
+	}
 
 	return {
 		commonPrefixes: (result.CommonPrefixes ?? []).map((item) => ({

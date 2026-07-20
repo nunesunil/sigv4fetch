@@ -1,7 +1,7 @@
 {
 	"compilerOptions": {
 		"target": "esnext",
-		"lib": ["es2024", "DOM"],
+		"lib": ["es2025", "DOM"],
 		"moduleDetection": "force",
 		"module": "preserve",
 		"moduleResolution": "bundler",
